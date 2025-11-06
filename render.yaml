@@ -1,0 +1,89 @@
+# File: render.yaml
+# (Save this in your root 'my_search_project/' folder)
+#
+# IMPORTANT: This configuration is for a complex, 4-service app.
+# Running FlareSolverr on Render is NOT recommended and may violate
+# their terms of service, leading to your app being suspended.
+# A VPS (like DigitalOcean) is the correct platform for this project.
+
+services:
+  # 1. The Redis Service (Managed by Render)
+  - type: redis
+    name: my-scraper-redis
+    plan: free # Good for testing, but you'll need a paid plan for production
+    ipAllowList: [] # Allows all services to connect
+
+  # 2. The FlareSolverr Service (Deployed as a Private Service)
+  # This is the one that will likely get suspended.
+  - type: pserv
+    name: my-scraper-flaresolverr
+    dockerimage: flaresolverr/flaresolverr:latest
+    envVars:
+      - key: LOG_LEVEL
+        value: info
+    # You will need to upgrade to a paid instance type to run this
+    # plan: standard 
+
+  # 3. The Django Web Server (Daphne)
+  - type: web
+    name: my-scraper-web
+    plan: free # Start with free, upgrade if needed
+    runtime: docker
+    # We tell Render to build from the root, using our Dockerfile
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    # Render provides a $PORT variable
+    command: daphne -b 0.0.0.0 -p $PORT scraper_project.asgi:application
+    envVars:
+      - key: DEBUG
+        value: "False" # Set to False for production
+      - key: DJANGO_ALLOWED_HOSTS
+        # Render provides this env var for your public .onrender.com URL
+        value: $RENDER_EXTERNAL_HOSTNAME
+      # --- Connect to Redis ---
+      - key: REDIS_URL
+        # This tells Django to get the connection string from the 'my-scraper-redis' service
+        fromService:
+          type: redis
+          name: my-scraper-redis
+          property: connectionString
+      # --- Connect to FlareSolverr ---
+      - key: FLARESOLVERR_URL
+        # This tells Django the *internal* URL for your FlareSolverr service
+        fromService:
+          type: pserv
+          name: my-scraper-flaresolverr
+          property: host # Note: This only provides the host, not port
+      # (We'll have to adjust our settings.py to build this URL)
+
+    # Health check for Render to know your app is "live"
+    healthCheck:
+      path: /
+      initialDelaySeconds: 60
+
+  # 4. The Celery Worker
+  - type: worker
+    name: my-scraper-worker
+    plan: free
+    runtime: docker
+    # Re-uses the same build as the 'web' service
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: celery -A scraper_project worker --pool=threads -c 12 --loglevel=info
+    envVars:
+      - key: DEBUG
+        value: "False"
+      # --- Connect to Redis ---
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: my-scraper-redis
+          property: connectionString
+      # --- Connect to FlareSolverr ---
+      - key: FLARESOLVERR_URL
+        fromService:
+          type: pserv
+          name: my-scraper-flaresolverr
+          property: host
