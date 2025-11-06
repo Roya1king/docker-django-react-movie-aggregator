@@ -1,0 +1,53 @@
+# File: docker-compose.yml
+# (This is in your root 'my_search_project/' folder)
+
+services:
+  
+  # 1. The Redis Service (Message Broker)
+  redis:
+    image: redis:latest
+    container_name: my-scraper-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  # 2. The FlareSolverr Service (Cloudflare Bypass)
+  flaresolverr:
+    image: flaresolverr/flaresolverr:latest
+    container_name: my-scraper-flaresolverr
+    ports:
+      - "8191:8191"
+    environment:
+      - LOG_LEVEL=info
+    restart: unless-stopped
+  
+  # 3. Your Django Web Server (Daphne)
+  web:
+    build:
+      context: .  # <-- FIX: Use root folder as context
+      dockerfile: backend/Dockerfile # <-- FIX: Point to Dockerfile
+    container_name: my-scraper-web
+    command: daphne -b 0.0.0.0 -p 8000 scraper_project.asgi:application
+    volumes:
+      # This path is now relative to the root folder
+      - ./backend/db.sqlite3:/app/db.sqlite3
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    depends_on:
+      - redis 
+
+  # 4. Your Celery Worker
+  worker:
+    build:
+      context: .  # <-- FIX: Use root folder as context
+      dockerfile: backend/Dockerfile # <-- FIX: Point to Dockerfile
+    container_name: my-scraper-worker
+    command: celery -A scraper_project worker --pool=threads -c 12 --loglevel=info
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - flaresolverr 
+
+volumes:
+  db_data:
